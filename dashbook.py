@@ -1,12 +1,14 @@
 import pandas as pd
 import dash
 from dash import html, dcc
+from dash.dependencies import Input, Output
 import plotly.express as px
+import plotly.graph_objects as go
 
-# Passo 2: Carregamento e Preparação dos Dados
+# Carregamento e Preparação dos Dados
 df = pd.read_excel("C:\\Users\\Danie\\OneDrive\\Área de Trabalho\\TCC\\book_ti_dados_tratados.xlsx")
 
-# Definição da função de categorização
+# Função de categorização para a primeira entrega
 def categorizar_tipo(valor):
     if valor == 21:
         return 'Incidente - Sistema'
@@ -20,41 +22,67 @@ def categorizar_tipo(valor):
         return 'Outro'
 
 df['Categoria_Detalhada'] = df['Tipo'].apply(categorizar_tipo)
-
-# Remove entradas com a categoria "Outro"
 df = df[df['Categoria_Detalhada'] != 'Outro']
-
-# Ordem desejada para as categorias
-categoria_ordem = ['Solicitação - Sistema', 'Incidente - Sistema', 'Solicitação - Infra', 'Incidente - Infra']
-
-# Assegura que os dados estejam na ordem desejada
-df['Categoria_Detalhada'] = pd.Categorical(df['Categoria_Detalhada'], categories=categoria_ordem, ordered=True)
-
-# Prepara os dados para o gráfico
 categoria_detalhada_counts = df['Categoria_Detalhada'].value_counts().sort_index().reset_index()
 categoria_detalhada_counts.columns = ['Categoria Detalhada', 'Total']
 
-# Criação do gráfico
-fig_detalhado = px.bar(categoria_detalhada_counts, x='Categoria Detalhada', y='Total', title="Volume por Categoria Detalhada", color='Categoria Detalhada', barmode='group')
+# Função para preparar os dados da segunda entrega
+def preparar_dados_segunda_entrega(df):
+    df['Data'] = pd.to_datetime(df['Data'])
+    df['Mês'] = df['Data'].dt.to_period('M')
+    abertos_por_mes = df.groupby(['Mês', 'area_TI'])['OS'].count().unstack(fill_value=0)
+    resolvidos_por_mes = df[df['Status'] == 'Resolvida'].groupby(['Mês', 'area_TI'])['OS'].count().unstack(fill_value=0)
+    backlog_por_mes = df[df['Status'] == 'Pendente'].groupby(['Mês', 'area_TI'])['OS'].count().unstack(fill_value=0)
+    
+    # Consolidar os dados para cada mês e área de TI
+    df_resumo = pd.concat([abertos_por_mes, resolvidos_por_mes, backlog_por_mes], axis=1, keys=['Abertos', 'Resolvidos', 'Backlog'])
+    return df_resumo
 
-# Calcula o total de OS
-total_os = len(df)
+df_resumo_segunda_entrega = preparar_dados_segunda_entrega(df)
 
-# Passo 3: Configuração do Dashboard Dash
+# Criação das Visualizações
+# Primeira Entrega: Gráfico de barras para volume por categoria detalhada
+fig_detalhado = px.bar(categoria_detalhada_counts, x='Categoria Detalhada', y='Total', title="Volume por Categoria Detalhada",
+                        color='Categoria Detalhada', barmode='group')
+
+# Inicialização do aplicativo Dash
 app = dash.Dash(__name__)
 
-app.layout = html.Div(children=[
-    html.H1(children='Dashboard de Análise de Desempenho do Setor de TI'),
-    html.H2(f"Total de OS: {total_os}"),
-    dcc.Graph(
-        id='detalhamento-categorias',
-        figure=fig_detalhado  # Insere a figura gerada com detalhamento
-    )
+# Definindo o layout do aplicativo
+app.layout = html.Div([
+    html.H1('Dashboard de Análise de Desempenho do Setor de TI'),
+    html.Div([
+        dcc.Graph(id='grafico-categoria-detalhada', figure=fig_detalhado)
+    ], style={'width': '48%', 'display': 'inline-block'}),
+
+    html.Div([
+        dcc.Dropdown(
+            id='equipe-dropdown',
+            options=[{'label': equipe, 'value': equipe} for equipe in df_resumo_segunda_entrega.columns.levels[1]],
+            value=df_resumo_segunda_entrega.columns.levels[1][0],
+            clearable=False
+        ),
+        dcc.Graph(id='linha-evolucao-tickets'),
+    ], style={'width': '48%', 'float': 'right', 'display': 'inline-block'})
 ])
 
-# Passo 4: Execução do Servidor
+# Callback para atualizar o gráfico de linha com base na equipe selecionada
+@app.callback(
+    Output('linha-evolucao-tickets', 'figure'),
+    [Input('equipe-dropdown', 'value')]
+)
+def update_line_chart(equipe_selecionada):
+    df_filtrado = df_resumo_segunda_entrega.xs(equipe_selecionada, level=1, axis=1)
+    fig = px.line(
+        df_filtrado,
+        x=df_filtrado.index.astype(str),
+        y=df_filtrado.columns,
+        markers=True,
+        title=f'Evolução dos Tickets - Equipe {equipe_selecionada}'
+    )
+    fig.update_layout(xaxis_title='Mês', yaxis_title='Total de Tickets')
+    return fig
+
+# Execução do servidor
 if __name__ == '__main__':
     app.run_server(debug=True)
-
-
-    
